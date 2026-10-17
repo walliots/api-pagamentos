@@ -1,0 +1,37 @@
+# Simulação da esteira (ENGPDP-19852): deploy canary, o rollout em si roda no Argo CD.
+# O título do run leva a CTASK.
+name: Deploy
+run-name: Deploy ${{ github.event.repository.name }} - ${{ inputs.change_task }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_task:
+        description: Número da Change Task (CTASK)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Build ${{ github.event.repository.name }} para ${{ inputs.change_task }}"
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Testes ok"
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "canary.enabled=$(grep -A2 'canary:' values.yaml | grep enabled | awk '{print $2}')"
+          echo "Imagem publicada; o Argo CD assume o Rollout canary."

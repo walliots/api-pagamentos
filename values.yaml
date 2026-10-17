@@ -1,0 +1,15 @@
+# Lido pela esteira/integração para decidir a ferramenta de rollout da CTASK.
+# canary.enabled=true -> Rollout canary no Argo CD
+name: api-pagamentos
+image:
+  repository: ghcr.io/walliots/api-pagamentos
+  tag: main
+strategy:
+  canary:
+    enabled: true
+    steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 50
+      - pause: { duration: 30s }
+      - setWeight: 100
