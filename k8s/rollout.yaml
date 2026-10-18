@@ -1,0 +1,36 @@
+# Usado só quando strategy.canary.enabled = true (o Argo CD sincroniza esta pasta).
+# A primeira pausa é sem tempo: o canary para em 20% esperando Retomar/Acelerar/Reverter.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: servico
+spec:
+  replicas: 5
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: servico
+  template:
+    metadata:
+      labels:
+        app: servico
+    spec:
+      containers:
+        - name: servico
+          image: argoproj/rollouts-demo:blue
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+  strategy:
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {}
+        - setWeight: 50
+        - pause: {duration: 10s}
+        - setWeight: 80
+        - pause: {duration: 10s}

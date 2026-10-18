@@ -1,15 +1,11 @@
-# Lido pela esteira/integração para decidir a ferramenta de rollout da CTASK.
-# canary.enabled=true -> Rollout canary no Argo CD
-name: api-pagamentos
+# values.yaml do serviço — a esteira lê daqui e registra no ServiceNow.
+# strategy.canary.enabled decide a origem do deploy na tela:
+#   true  -> Argo CD (Rollout canary)
+#   false -> GitHub (jobs de deploy com aprovação no environment)
+app:
+  name: api-pagamentos
 image:
-  repository: ghcr.io/walliots/api-pagamentos
-  tag: main
+  repository: argoproj/rollouts-demo
 strategy:
   canary:
     enabled: true
-    steps:
-      - setWeight: 20
-      - pause: {}
-      - setWeight: 50
-      - pause: { duration: 30s }
-      - setWeight: 100

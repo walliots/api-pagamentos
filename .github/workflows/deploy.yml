@@ -1,5 +1,10 @@
-# Simulação da esteira (ENGPDP-19852): deploy canary, o rollout em si roda no Argo CD.
-# O título do run leva a CTASK.
+# Esteira simulada (ENGPDP-19852):
+#   1. lê o values.yaml (nome do serviço e strategy.canary.enabled)
+#   2. registra a versão no ServiceNow (tabela de artifact version, ligada à CTASK)
+#   3. canary = true  -> atualiza a imagem em k8s/rollout.yaml; o Argo CD faz o canary
+#      canary = false -> segue os jobs de deploy do GitHub, com aprovação no environment "producao"
+#
+# Secrets do repositório: SN_INSTANCE (ex. dev436806.service-now.com), SN_USER, SN_PASSWORD
 name: Deploy
 run-name: Deploy ${{ github.event.repository.name }} - ${{ inputs.change_task }}
 
@@ -7,31 +12,104 @@ on:
   workflow_dispatch:
     inputs:
       change_task:
-        description: Número da Change Task (CTASK)
+        description: Número da CTASK (ex. CTASK0010001)
         required: true
-        type: string
+      versao:
+        description: Versão a implantar (cor da imagem de demonstração)
+        required: true
+        type: choice
+        options: [blue, green, yellow, red, purple, orange]
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  SN_TABLE: x_1022012_devops_0_artifact_version
 
 jobs:
-  build:
+  preparar:
+    runs-on: ubuntu-latest
+    outputs:
+      canary: ${{ steps.values.outputs.canary }}
+      nome: ${{ steps.values.outputs.nome }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: values
+        name: Ler values.yaml
+        run: |
+          echo "canary=$(yq '.strategy.canary.enabled // false' values.yaml)" >> "$GITHUB_OUTPUT"
+          echo "nome=$(yq '.app.name' values.yaml)" >> "$GITHUB_OUTPUT"
+          echo "canary: $(yq '.strategy.canary.enabled // false' values.yaml)"
+
+  registrar:
+    needs: preparar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Registrar versão no ServiceNow
+        env:
+          SN_INSTANCE: ${{ secrets.SN_INSTANCE }}
+          SN_USER: ${{ secrets.SN_USER }}
+          SN_PASSWORD: ${{ secrets.SN_PASSWORD }}
+          NOME: ${{ needs.preparar.outputs.nome }}
+          CANARY: ${{ needs.preparar.outputs.canary }}
+          VERSAO: ${{ inputs.versao }}
+          CTASK: ${{ inputs.change_task }}
+        run: |
+          body=$(jq -n \
+            --arg name "$NOME" --arg version "$VERSAO" --arg canary "$CANARY" \
+            --arg repo "${{ github.repository }}" --arg run "${{ github.run_id }}" --arg ctask "$CTASK" \
+            '{name:$name, version:$version, canary_enabled:$canary, repository:$repo,
+              run_id:$run, argo_application:$name, change_task:$ctask}')
+          curl --fail-with-body -sS -u "$SN_USER:$SN_PASSWORD" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -X POST "https://$SN_INSTANCE/api/now/table/$SN_TABLE?sysparm_input_display_value=true" \
+            -d "$body"
+
+  # ---------- canary = true: GitOps, o Argo CD faz o deploy ----------
+  deploy-argo:
+    needs: [preparar, registrar]
+    if: needs.preparar.outputs.canary == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: echo "Build ${{ github.event.repository.name }} para ${{ inputs.change_task }}"
+      - name: Atualizar imagem no manifesto
+        env:
+          VERSAO: ${{ inputs.versao }}
+        run: |
+          yq -i '.spec.template.spec.containers[0].image = "argoproj/rollouts-demo:" + strenv(VERSAO)' k8s/rollout.yaml
+          if git diff --quiet; then
+            echo "Imagem já está em $VERSAO; nada para implantar."
+            exit 0
+          fi
+          git config user.name "esteira"
+          git config user.email "esteira@users.noreply.github.com"
+          git commit -am "deploy ${VERSAO} - ${{ inputs.change_task }}"
+          git push
+
+  # ---------- canary = false: deploy pelo GitHub ----------
+  build:
+    needs: [preparar, registrar]
+    if: needs.preparar.outputs.canary != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "build ${{ inputs.versao }}" && sleep 20
 
   test:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Testes ok"
+      - run: echo "testes" && sleep 20
 
-  publish:
+  deploy-hml:
     needs: test
     runs-on: ubuntu-latest
+    environment: hml
     steps:
-      - uses: actions/checkout@v4
-      - run: |
-          echo "canary.enabled=$(grep -A2 'canary:' values.yaml | grep enabled | awk '{print $2}')"
-          echo "Imagem publicada; o Argo CD assume o Rollout canary."
+      - run: echo "deploy HML" && sleep 15
+
+  deploy-producao:
+    needs: deploy-hml
+    runs-on: ubuntu-latest
+    environment: producao
+    steps:
+      - run: echo "deploy produção" && sleep 15
