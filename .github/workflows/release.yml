@@ -1,0 +1,129 @@
+# Release (ENGPDP-19852): um único run implanta api-pagamentos e api-cartoes sob UMA change e UMA CTASK.
+#   - lê o strategy.canary.enabled de cada serviço (values.yaml)
+#   - cria 1 change com os dois artefatos no payload (um flow cria a CTASK e grava as versões)
+#   - canary = true  -> commita a imagem no k8s/rollout.yaml do serviço; o Argo CD faz o canary
+#   - canary = false -> jobs de deploy do GitHub NESTE run, com aprovação no environment "producao"
+# Como o run do artefato GitHub é este, o repositório gravado para ele é o deste repo.
+# A versão registrada é "<cor>-<número do run>": a tabela do plugin impede versão repetida do mesmo artefato.
+name: Release
+run-name: Release pagamentos ${{ inputs.versao_pagamentos }} + cartoes ${{ inputs.versao_cartoes }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      versao_pagamentos:
+        description: Versão do api-pagamentos (cor da imagem de demonstração)
+        required: true
+        type: choice
+        options: [blue, green, yellow, red, purple, orange]
+      versao_cartoes:
+        description: Versão do api-cartoes
+        required: true
+        type: choice
+        options: [blue, green, yellow, red, purple, orange]
+
+permissions:
+  contents: write
+
+jobs:
+  preparar:
+    runs-on: ubuntu-latest
+    outputs:
+      canary_pagamentos: ${{ steps.values.outputs.canary_pagamentos }}
+      canary_cartoes: ${{ steps.values.outputs.canary_cartoes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: walliots/api-cartoes
+          path: cartoes
+      - id: values
+        name: Ler values.yaml dos dois serviços
+        run: |
+          echo "canary_pagamentos=$(yq '.strategy.canary.enabled // false' values.yaml)" >> "$GITHUB_OUTPUT"
+          echo "canary_cartoes=$(yq '.strategy.canary.enabled // false' cartoes/values.yaml)" >> "$GITHUB_OUTPUT"
+          echo "pagamentos canary: $(yq '.strategy.canary.enabled // false' values.yaml)"
+          echo "cartoes canary: $(yq '.strategy.canary.enabled // false' cartoes/values.yaml)"
+
+  change:
+    needs: preparar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Montar payload da change
+        id: payload
+        env:
+          CANARY_PAG: ${{ needs.preparar.outputs.canary_pagamentos }}
+          CANARY_CAR: ${{ needs.preparar.outputs.canary_cartoes }}
+          VER_PAG: ${{ inputs.versao_pagamentos }}-${{ github.run_number }}
+          VER_CAR: ${{ inputs.versao_cartoes }}-${{ github.run_number }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.run_id }}
+        run: |
+          deploy=$(jq -cn --arg vp "$VER_PAG" --arg vc "$VER_CAR" --arg repo "$REPO" --arg run "$RUN" \
+            --argjson cp "$CANARY_PAG" --argjson cc "$CANARY_CAR" \
+            '{artifacts:[
+              {name:"api-pagamentos", version:$vp, repository:$repo, run_id:$run, argo_application:"api-pagamentos", canary_enabled:$cp},
+              {name:"api-cartoes",    version:$vc, repository:$repo, run_id:$run, argo_application:"api-cartoes",    canary_enabled:$cc}
+            ]}')
+          cr=$(jq -cn --arg sd "Release api-pagamentos $VER_PAG + api-cartoes $VER_CAR" --arg payload "$deploy" \
+            '{attributes:{short_description:$sd, x_1022012_devops_0_u_deploy_payload:$payload}}')
+          echo "cr=$cr" >> "$GITHUB_OUTPUT"
+      - name: Criar change no ServiceNow
+        uses: ServiceNow/servicenow-devops-change@v7.1.0
+        with:
+          instance-url: ${{ secrets.SN_INSTANCE_URL }}
+          devops-integration-token: ${{ secrets.SN_DEVOPS_INTEGRATION_TOKEN }}
+          tool-id: ${{ secrets.SN_ORCHESTRATION_TOOL_ID }}
+          context-github: ${{ toJSON(github) }}
+          job-name: change
+          interval: '15'
+          change-request: ${{ steps.payload.outputs.cr }}
+
+  # ---------- api-pagamentos com canary = true: GitOps, o Argo CD faz o deploy ----------
+  deploy-argo:
+    needs: [preparar, change]
+    if: needs.preparar.outputs.canary_pagamentos == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Atualizar imagem no manifesto
+        env:
+          VERSAO: ${{ inputs.versao_pagamentos }}
+        run: |
+          yq -i '.spec.template.spec.containers[0].image = "argoproj/rollouts-demo:" + strenv(VERSAO)' k8s/rollout.yaml
+          if git diff --quiet; then
+            echo "Imagem já está em $VERSAO; nada para implantar."
+            exit 0
+          fi
+          git config user.name "esteira"
+          git config user.email "esteira@users.noreply.github.com"
+          git commit -am "release pagamentos ${VERSAO} (run ${{ github.run_id }})"
+          git push
+
+  # ---------- api-cartoes com canary = false: deploy pelos jobs do GitHub, com aprovação ----------
+  build:
+    needs: [preparar, change]
+    if: needs.preparar.outputs.canary_cartoes != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "build api-cartoes ${{ inputs.versao_cartoes }}" && sleep 20
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "testes" && sleep 20
+
+  deploy-hml:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: hml
+    steps:
+      - run: echo "deploy HML" && sleep 15
+
+  deploy-producao:
+    needs: deploy-hml
+    runs-on: ubuntu-latest
+    environment: producao
+    steps:
+      - run: echo "deploy produção" && sleep 15
