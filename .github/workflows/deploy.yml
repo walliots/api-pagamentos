@@ -45,6 +45,8 @@ jobs:
   change:
     needs: preparar
     runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.link.outputs.url }}
     steps:
       - name: Montar payload da change
         id: payload
@@ -68,6 +70,7 @@ jobs:
           interval: '15'
           change-request: ${{ steps.payload.outputs.cr }}
       - name: Publicar o link da change no resumo do run
+        id: link
         if: success()
         env:
           CHG_NUMBER: ${{ steps.chg.outputs.change-request-number }}
@@ -81,6 +84,7 @@ jobs:
           url="${SN_URL}/nav_to.do?uri=change_request.do%3Fsys_id%3D${CHG_SYS_ID}"
           echo "::notice title=Change no ServiceNow::${CHG_NUMBER} - ${url}"
           { echo "### Change no ServiceNow"; echo; echo "[${CHG_NUMBER}](${url})"; } >> "$GITHUB_STEP_SUMMARY"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
 
   # ---------- canary = true: GitOps, o Argo CD faz o deploy ----------
   deploy-argo:
@@ -118,15 +122,19 @@ jobs:
       - run: echo "testes" && sleep 20
 
   deploy-hml:
-    needs: test
+    needs: [test, change]
     runs-on: ubuntu-latest
-    environment: hml
+    environment:
+      name: hml
+      url: ${{ needs.change.outputs.url }}
     steps:
       - run: echo "deploy HML" && sleep 15
 
   deploy-producao:
-    needs: deploy-hml
+    needs: [deploy-hml, change]
     runs-on: ubuntu-latest
-    environment: producao
+    environment:
+      name: producao
+      url: ${{ needs.change.outputs.url }}
     steps:
       - run: echo "deploy produção" && sleep 15
