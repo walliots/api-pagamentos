@@ -54,7 +54,7 @@ jobs:
           VERSAO: ${{ inputs.versao }}
         run: |
           deploy=$(jq -cn --arg name "$NOME" --arg version "$VERSAO" --arg repo "${{ github.repository }}"             --arg run "${{ github.run_id }}" --argjson canary "$CANARY"             '{artifacts:[{name:$name, version:$version, repository:$repo, run_id:$run, argo_application:$name, canary_enabled:$canary}]}')
-          cr=$(jq -cn --arg sd "Deploy $NOME $VERSAO" --arg payload "$deploy"             '{attributes:{short_description:$sd, u_deploy_payload:$payload}}')
+          cr=$(jq -cn --arg sd "Deploy $NOME $VERSAO" --arg payload "$deploy"             '{attributes:{short_description:$sd, x_1022012_devops_0_u_deploy_payload:$payload}}')
           echo "cr=$cr" >> "$GITHUB_OUTPUT"
       - name: Criar change no ServiceNow
         uses: ServiceNow/servicenow-devops-change@v7.1.0
