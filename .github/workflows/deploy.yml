@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 env:
-  SN_TABLE: x_1022012_devops_0_artifact_version
+  SN_TABLE: x_1022012_devops_0_sn_devops_artifact_version
 
 jobs:
   preparar:
