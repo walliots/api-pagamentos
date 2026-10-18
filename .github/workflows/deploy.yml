@@ -62,7 +62,7 @@ jobs:
         id: chg
         uses: ServiceNow/servicenow-devops-change@v7.1.0
         with:
-          instance-url: ${{ secrets.SN_INSTANCE_URL }}
+          instance-url: ${{ vars.SN_INSTANCE_URL }}
           devops-integration-token: ${{ secrets.SN_DEVOPS_INTEGRATION_TOKEN }}
           tool-id: ${{ secrets.SN_ORCHESTRATION_TOOL_ID }}
           context-github: ${{ toJSON(github) }}
