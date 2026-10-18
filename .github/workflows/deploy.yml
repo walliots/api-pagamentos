@@ -1,19 +1,20 @@
 # Esteira simulada (ENGPDP-19852):
 #   1. lê o values.yaml (nome do serviço e strategy.canary.enabled)
-#   2. registra a versão no ServiceNow (tabela de artifact version, ligada à CTASK)
+#   2. cria a change no ServiceNow com o payload dos artefatos; um flow cria a CTASK e grava as versões
 #   3. canary = true  -> atualiza a imagem em k8s/rollout.yaml; o Argo CD faz o canary
 #      canary = false -> segue os jobs de deploy do GitHub, com aprovação no environment "producao"
 #
 # Secrets do repositório: SN_INSTANCE (ex. dev436806.service-now.com), SN_USER, SN_PASSWORD
 name: Deploy
-run-name: Deploy ${{ github.event.repository.name }} - ${{ inputs.change_task }}
+run-name: Deploy ${{ github.event.repository.name }} ${{ inputs.versao }}
 
 on:
   workflow_dispatch:
     inputs:
       change_task:
-        description: Número da CTASK (ex. CTASK0010001)
-        required: true
+        description: (Opcional, legado) CTASK; a CTASK agora é criada pelo flow
+        required: false
+        default: ''
       versao:
         description: Versão a implantar (cor da imagem de demonstração)
         required: true
@@ -41,33 +42,34 @@ jobs:
           echo "nome=$(yq '.app.name' values.yaml)" >> "$GITHUB_OUTPUT"
           echo "canary: $(yq '.strategy.canary.enabled // false' values.yaml)"
 
-  registrar:
+  change:
     needs: preparar
     runs-on: ubuntu-latest
     steps:
-      - name: Registrar versão no ServiceNow
+      - name: Montar payload da change
+        id: payload
         env:
-          SN_INSTANCE: ${{ secrets.SN_INSTANCE }}
-          SN_USER: ${{ secrets.SN_USER }}
-          SN_PASSWORD: ${{ secrets.SN_PASSWORD }}
           NOME: ${{ needs.preparar.outputs.nome }}
           CANARY: ${{ needs.preparar.outputs.canary }}
           VERSAO: ${{ inputs.versao }}
-          CTASK: ${{ inputs.change_task }}
         run: |
-          body=$(jq -n \
-            --arg name "$NOME" --arg version "$VERSAO" --arg canary "$CANARY" \
-            --arg repo "${{ github.repository }}" --arg run "${{ github.run_id }}" --arg ctask "$CTASK" \
-            '{name:$name, version:$version, canary_enabled:$canary, repository:$repo,
-              run_id:$run, argo_application:$name, change_task:$ctask}')
-          curl --fail-with-body -sS -u "$SN_USER:$SN_PASSWORD" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -X POST "https://$SN_INSTANCE/api/now/table/$SN_TABLE?sysparm_input_display_value=true" \
-            -d "$body"
+          deploy=$(jq -cn --arg name "$NOME" --arg version "$VERSAO" --arg repo "${{ github.repository }}"             --arg run "${{ github.run_id }}" --argjson canary "$CANARY"             '{artifacts:[{name:$name, version:$version, repository:$repo, run_id:$run, argo_application:$name, canary_enabled:$canary}]}')
+          cr=$(jq -cn --arg sd "Deploy $NOME $VERSAO" --arg payload "$deploy"             '{attributes:{short_description:$sd, u_deploy_payload:$payload}}')
+          echo "cr=$cr" >> "$GITHUB_OUTPUT"
+      - name: Criar change no ServiceNow
+        uses: ServiceNow/servicenow-devops-change@v7.1.0
+        with:
+          instance-url: ${{ secrets.SN_INSTANCE_URL }}
+          devops-integration-token: ${{ secrets.SN_DEVOPS_INTEGRATION_TOKEN }}
+          tool-id: ${{ secrets.SN_ORCHESTRATION_TOOL_ID }}
+          context-github: ${{ toJSON(github) }}
+          job-name: change
+          interval: '15'
+          change-request: ${{ steps.payload.outputs.cr }}
 
   # ---------- canary = true: GitOps, o Argo CD faz o deploy ----------
   deploy-argo:
-    needs: [preparar, registrar]
+    needs: [preparar, change]
     if: needs.preparar.outputs.canary == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -88,7 +90,7 @@ jobs:
 
   # ---------- canary = false: deploy pelo GitHub ----------
   build:
-    needs: [preparar, registrar]
+    needs: [preparar, change]
     if: needs.preparar.outputs.canary != 'true'
     runs-on: ubuntu-latest
     steps:
