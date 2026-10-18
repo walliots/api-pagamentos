@@ -71,7 +71,7 @@ jobs:
   change-link:
     needs: preparar
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Publicar o link da change
         env:
@@ -82,8 +82,10 @@ jobs:
           RUN: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
         run: |
+          # espera a action criar a change antes de consultar: consultar cedo demais atrapalha a criação
+          sleep 45
           pipeline=$(jq -rn --arg v "$PIPELINE" '$v|@uri')
-          for i in $(seq 1 60); do
+          for i in $(seq 1 40); do
             resp=$(curl -sS -H "Authorization: sn_devops.DevOpsToken ${TOOL_ID}:${SN_TOKEN}" -H "Accept: application/json"               "${SN_URL}/api/sn_devops/v2/devops/orchestration/changeStatus?toolId=${TOOL_ID}&stageName=change&pipelineName=${pipeline}&buildNumber=${RUN}&attemptNumber=${ATTEMPT}" || true)
             num=$(echo "$resp" | jq -r '.result.details.number // empty' 2>/dev/null || true)
             sid=$(echo "$resp" | jq -r '.result.details.sys_id // empty' 2>/dev/null || true)
@@ -93,9 +95,9 @@ jobs:
               { echo "### Change no ServiceNow"; echo; echo "[${num}](${url})"; } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            sleep 5
+            sleep 10
           done
-          echo "::warning title=Change no ServiceNow::A change não apareceu em 5 minutos"
+          echo "::warning title=Change no ServiceNow::A change não apareceu em 7 minutos"
 
   # ---------- canary = true: GitOps, o Argo CD faz o deploy ----------
   deploy-argo:
